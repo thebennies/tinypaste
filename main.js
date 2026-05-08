@@ -211,6 +211,16 @@ function response(
   });
 }
 
+function corsHeaders(headers = {}) {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "content-type, accept",
+    "access-control-max-age": "86400",
+    ...headers,
+  };
+}
+
 function page(title, body, scripts = "") {
   return `<!doctype html>
 <html lang="en">
@@ -396,6 +406,10 @@ function handleError(error, request) {
 
   const url = new URL(request.url);
 
+  if (url.pathname === "/api/pastes") {
+    Object.assign(headers, corsHeaders());
+  }
+
   if (request.method === "POST" && url.pathname === "/" && status < 500) {
     return response(
       editorPage(message),
@@ -460,24 +474,28 @@ export function createHandler(options = {}) {
       if (request.method === "POST" && pathname === "/api/pastes") {
         const { id, rate } = await createPaste(request, kv, config);
         const url = publicUrl(request, config, `/${id}`);
+        const headers = corsHeaders({
+          "x-ratelimit-limit": String(config.rateLimitPosts),
+          "x-ratelimit-remaining": String(rate.remaining),
+          "x-ratelimit-reset": String(rate.resetSeconds),
+        });
 
         if (acceptsJson(request)) {
           return response(
             JSON.stringify({ id, url }),
             201,
             "application/json; charset=utf-8",
-            {
-              "x-ratelimit-limit": String(config.rateLimitPosts),
-              "x-ratelimit-remaining": String(rate.remaining),
-              "x-ratelimit-reset": String(rate.resetSeconds),
-            },
+            headers,
           );
         }
 
-        return response(`${url}\n`, 201, "text/plain; charset=utf-8", {
-          "x-ratelimit-limit": String(config.rateLimitPosts),
-          "x-ratelimit-remaining": String(rate.remaining),
-          "x-ratelimit-reset": String(rate.resetSeconds),
+        return response(`${url}\n`, 201, "text/plain; charset=utf-8", headers);
+      }
+
+      if (request.method === "OPTIONS" && pathname === "/api/pastes") {
+        return new Response(null, {
+          status: 204,
+          headers: corsHeaders(),
         });
       }
 
