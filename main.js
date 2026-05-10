@@ -288,7 +288,8 @@ function viewPage(id, paste) {
   ${navHtml(`<a href="/${id}.md">raw</a>`)}
   <article class="markdown">${paste.html}</article>
 </main>`,
-    `<script type="module">
+    `<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+<script type="module">
 import mermaid from "https://esm.sh/mermaid@11.14.0";
 window.mermaid = mermaid;
 await import("/view.js");
@@ -764,6 +765,7 @@ button:active {
 }
 
 .mermaid-frame:active { cursor: grabbing; }
+.mermaid-frame.is-grabbing { cursor: grabbing; }
 
 .mermaid-frame:focus-visible {
   outline: 2px solid var(--fg);
@@ -796,19 +798,19 @@ button:active {
 }
 
 .mermaid-content {
-  display: block;
-  position: absolute;
-  top: 0;
-  left: 0;
-  transform-origin: 0 0;
-  will-change: transform;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
   user-select: none;
 }
 
 .mermaid-content svg {
   display: block;
+  width: 100% !important;
+  height: 100% !important;
   max-width: none !important;
-  height: auto;
 }
 
 .mermaid-error {
@@ -843,6 +845,7 @@ button:active {
 }
 
 .mermaid-fullscreen-frame:active { cursor: grabbing; }
+.mermaid-fullscreen-frame.is-grabbing { cursor: grabbing; }
 
 @media (max-width: 520px) {
   html { font-size: 16px; }
@@ -861,11 +864,10 @@ button:active {
 
 export const VIEW_SCRIPT = `
 (() => {
-  const MIN_SCALE = 0.35;
-  const MAX_SCALE = 8;
   const diagrams = Array.from(document.querySelectorAll("[data-mermaid]"));
   let overlay = null;
   let overlayController = null;
+  let overlayPanZoom = null;
 
   if (!diagrams.length) return;
 
@@ -890,39 +892,6 @@ export const VIEW_SCRIPT = `
     }
   });
 
-  function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
-  }
-
-  function distance(first, second) {
-    return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
-  }
-
-  function midpoint(first, second) {
-    return {
-      clientX: (first.clientX + second.clientX) / 2,
-      clientY: (first.clientY + second.clientY) / 2
-    };
-  }
-
-  function applyTransform(content, state) {
-    content.style.transform = "translate(" + state.x + "px, " + state.y + "px) scale(" + state.scale + ")";
-  }
-
-  function zoomAt(frame, content, state, clientX, clientY, factor) {
-    const rect = frame.getBoundingClientRect();
-    const pointX = clientX - rect.left;
-    const pointY = clientY - rect.top;
-    const contentX = (pointX - state.x) / state.scale;
-    const contentY = (pointY - state.y) / state.scale;
-    const nextScale = clamp(state.scale * factor, MIN_SCALE, MAX_SCALE);
-
-    state.x = pointX - contentX * nextScale;
-    state.y = pointY - contentY * nextScale;
-    state.scale = nextScale;
-    applyTransform(content, state);
-  }
-
   function contentSize(content) {
     const svg = content.querySelector("svg");
     if (!svg) return { width: 800, height: 480 };
@@ -937,149 +906,127 @@ export const VIEW_SCRIPT = `
     const svg = content.querySelector("svg");
     if (!svg) return;
 
-    const viewBox = svg.viewBox && svg.viewBox.baseVal;
-    if (viewBox && viewBox.width && viewBox.height) {
-      svg.setAttribute("width", String(Math.ceil(viewBox.width)));
-      svg.setAttribute("height", String(Math.ceil(viewBox.height)));
-    }
-
     svg.removeAttribute("style");
-    svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", "100%");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
   }
 
-  function resetView(frame, content, state, dynamicHeight) {
+  function setFrameHeight(frame, content) {
     const padding = 12;
     const { width, height } = contentSize(content);
     const fitScale = Math.min(1, (frame.clientWidth - padding * 2) / width);
 
-    state.scale = clamp(fitScale, MIN_SCALE, MAX_SCALE);
-    state.x = padding;
-    state.y = padding;
-
-    if (dynamicHeight) {
-      frame.style.height = Math.round(Math.min(window.innerHeight * 0.72, Math.max(240, height * state.scale + padding * 2))) + "px";
-    }
-
-    applyTransform(content, state);
+    frame.style.height = Math.round(Math.min(window.innerHeight * 0.72, Math.max(240, height * fitScale + padding * 2))) + "px";
   }
 
-  function attachGestures(frame, content, options = {}) {
+  function fitPanZoom(frame, content, panZoom, dynamicHeight) {
+    if (dynamicHeight) setFrameHeight(frame, content);
+
+    try {
+      panZoom.resize();
+      panZoom.fit();
+      panZoom.center();
+    } catch {}
+  }
+
+  function resetPanZoom(panZoom) {
+    try {
+      panZoom.resetZoom();
+      panZoom.center();
+      panZoom.fit();
+    } catch {}
+  }
+
+  function destroyPanZoom(panZoom) {
+    if (!panZoom) return;
+
+    try {
+      panZoom.destroy();
+    } catch {}
+  }
+
+  function attachPanZoom(frame, content, options = {}) {
     const dynamicHeight = Boolean(options.dynamicHeight);
-    const state = { scale: 1, x: 0, y: 0 };
-    const pointers = new Map();
     const listenerOptions = options.signal
       ? { signal: options.signal }
       : undefined;
-    let previousPinch = null;
-    let previousPointer = null;
-    let lastTapAt = 0;
-    let movedSinceDown = false;
+    const svg = content.querySelector("svg");
 
     frame.tabIndex = 0;
     frame.setAttribute("role", "img");
     frame.setAttribute("aria-label", "Mermaid diagram. Drag to pan. Wheel or pinch to zoom. Double-click or double-tap to reset.");
 
-    const reset = () => resetView(frame, content, state, dynamicHeight);
+    if (dynamicHeight) setFrameHeight(frame, content);
+    normalizeSvg(content);
 
-    requestAnimationFrame(reset);
-    window.addEventListener("resize", reset, listenerOptions);
+    if (!svg || typeof window.svgPanZoom !== "function") {
+      return null;
+    }
 
-    frame.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      zoomAt(frame, content, state, event.clientX, event.clientY, Math.exp(-event.deltaY * 0.0015));
-    }, { passive: false });
-
-    frame.addEventListener("dblclick", (event) => {
-      event.preventDefault();
-      resetView(frame, content, state, dynamicHeight);
+    const panZoom = window.svgPanZoom(svg, {
+      zoomEnabled: true,
+      controlIconsEnabled: false,
+      fit: true,
+      center: true,
+      contain: false,
+      minZoom: 0.2,
+      maxZoom: 12,
+      zoomScaleSensitivity: 0.35,
+      dblClickZoomEnabled: false,
+      mouseWheelZoomEnabled: true,
     });
 
+    const refit = () => fitPanZoom(frame, content, panZoom, dynamicHeight);
+    const releaseGrab = () => frame.classList.remove("is-grabbing");
+
+    requestAnimationFrame(refit);
+    window.addEventListener("resize", refit, listenerOptions);
+    frame.addEventListener("mousedown", () => frame.classList.add("is-grabbing"), listenerOptions);
+    frame.addEventListener("mouseup", releaseGrab, listenerOptions);
+    frame.addEventListener("mouseleave", releaseGrab, listenerOptions);
+    svg.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      resetPanZoom(panZoom);
+    }, listenerOptions);
+
     frame.addEventListener("keydown", (event) => {
-      if (event.key === "+" || event.key === "=" || event.key === "-") {
+      if (event.key === "+" || event.key === "=") {
         event.preventDefault();
-        const rect = frame.getBoundingClientRect();
-        zoomAt(frame, content, state, rect.left + rect.width / 2, rect.top + rect.height / 2, event.key === "-" ? 1 / 1.2 : 1.2);
+        panZoom.zoomBy(1.2);
+      }
+
+      if (event.key === "-") {
+        event.preventDefault();
+        panZoom.zoomBy(1 / 1.2);
       }
 
       if (event.key === "0" || event.key === "Escape") {
         event.preventDefault();
-        resetView(frame, content, state, dynamicHeight);
+        resetPanZoom(panZoom);
       }
-    });
+    }, listenerOptions);
 
-    frame.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
-      frame.setPointerCapture(event.pointerId);
-      pointers.set(event.pointerId, event);
-      previousPointer = event;
-      previousPinch = null;
-      movedSinceDown = false;
-    });
-
-    frame.addEventListener("pointermove", (event) => {
-      if (!pointers.has(event.pointerId)) return;
-      event.preventDefault();
-      pointers.set(event.pointerId, event);
-
-      if (pointers.size >= 2) {
-        const active = Array.from(pointers.values()).slice(0, 2);
-        const center = midpoint(active[0], active[1]);
-        const nextDistance = distance(active[0], active[1]);
-
-        if (previousPinch) {
-          zoomAt(frame, content, state, center.clientX, center.clientY, nextDistance / previousPinch.distance);
-          state.x += center.clientX - previousPinch.center.clientX;
-          state.y += center.clientY - previousPinch.center.clientY;
-          applyTransform(content, state);
-        }
-
-        previousPinch = { distance: nextDistance, center };
-        previousPointer = null;
-        movedSinceDown = true;
-        return;
-      }
-
-      if (previousPointer) {
-        const dx = event.clientX - previousPointer.clientX;
-        const dy = event.clientY - previousPointer.clientY;
-        if (Math.abs(dx) + Math.abs(dy) > 2) movedSinceDown = true;
-
-        state.x += dx;
-        state.y += dy;
-        previousPointer = event;
-        applyTransform(content, state);
-      }
-    });
-
-    function finishPointer(event) {
-      if (!pointers.has(event.pointerId)) return;
-
-      pointers.delete(event.pointerId);
-      previousPinch = null;
-      previousPointer = pointers.size === 1 ? Array.from(pointers.values())[0] : null;
-
-      if (!movedSinceDown && pointers.size === 0) {
-        const now = Date.now();
-        if (now - lastTapAt < 320) {
-          resetView(frame, content, state, dynamicHeight);
-          lastTapAt = 0;
-        } else {
-          lastTapAt = now;
-        }
-      }
+    if (options.signal) {
+      options.signal.addEventListener("abort", () => {
+        destroyPanZoom(panZoom);
+      }, { once: true });
     }
 
-    frame.addEventListener("pointerup", finishPointer);
-    frame.addEventListener("pointercancel", finishPointer);
-    frame.addEventListener("lostpointercapture", finishPointer);
+    return panZoom;
   }
 
   function closeFullscreen() {
     if (!overlay) return;
 
+    const panZoom = overlayPanZoom;
+    overlayPanZoom = null;
+
     if (overlayController) {
       overlayController.abort();
       overlayController = null;
+    } else {
+      destroyPanZoom(panZoom);
     }
 
     overlay.hidden = true;
@@ -1106,20 +1053,23 @@ export const VIEW_SCRIPT = `
     return overlay;
   }
 
-  function openFullscreen(sourceContent) {
+  function openFullscreen(svgHtml) {
     const currentOverlay = ensureOverlay();
     const frame = currentOverlay.querySelector(".mermaid-fullscreen-frame");
-    const content = sourceContent.cloneNode(true);
+    const content = document.createElement("div");
 
     if (overlayController) {
       overlayController.abort();
+      overlayController = null;
+      overlayPanZoom = null;
     }
 
     overlayController = new AbortController();
-    content.style.transform = "";
+    content.className = "mermaid-content";
+    content.innerHTML = svgHtml;
     frame.replaceChildren(content);
     currentOverlay.hidden = false;
-    attachGestures(frame, content, {
+    overlayPanZoom = attachPanZoom(frame, content, {
       dynamicHeight: false,
       signal: overlayController.signal,
     });
@@ -1143,10 +1093,10 @@ export const VIEW_SCRIPT = `
 
     try {
       const result = await window.mermaid.render("mermaid-" + Date.now() + "-" + index, source);
+      const svgHtml = result.svg;
       content.innerHTML = result.svg;
-      normalizeSvg(content);
-      attachGestures(frame, content, { dynamicHeight: true });
-      open.addEventListener("click", () => openFullscreen(content));
+      attachPanZoom(frame, content, { dynamicHeight: true });
+      open.addEventListener("click", () => openFullscreen(svgHtml));
     } catch {
       const pre = document.createElement("pre");
       pre.className = "mermaid-error";
