@@ -49,7 +49,7 @@ You can deploy it on [Deno](https://deno.com/deploy) quickly:
 
 Easy to integrate with existing tools. Here's the script to use it with [Raycast](https://www.raycast.com).
 
-![demo.gif](https://raw.githubusercontent.com/martinopiaggi/tinypaste/main/tinypaste.gif)
+![demo.gif](https://raw.githubusercontent.com/martinopiaggi/tinypaste/refs/heads/main/tinypaste.gif)
 
 ```pwsh
 #!/usr/bin/env pwsh
