@@ -55,22 +55,22 @@ md.renderer.rules.fence = (tokens, index, options, env, self) => {
   return defaultFence(tokens, index, options, env, self);
 };
 
-function envNumber(name, fallback) {
+function envInteger(name, fallback) {
   const value = Number(Deno.env.get(name));
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 export function configFromEnv() {
   return {
-    baseUrl: Deno.env.get("BASE_URL") || "",
-    idLength: envNumber("ID_LENGTH", 7),
-    maxMarkdownBytes: envNumber(
+    baseUrl: Deno.env.get("BASE_URL")?.trim() || "",
+    idLength: envInteger("ID_LENGTH", 7),
+    maxMarkdownBytes: envInteger(
       "MAX_MARKDOWN_BYTES",
       DEFAULT_MAX_MARKDOWN_BYTES,
     ),
-    port: envNumber("PORT", 3000),
-    rateLimitPosts: envNumber("RATE_LIMIT_POSTS", 20),
-    rateLimitWindowSeconds: envNumber("RATE_LIMIT_WINDOW_SECONDS", 3600),
+    port: envInteger("PORT", 3000),
+    rateLimitPosts: envInteger("RATE_LIMIT_POSTS", 20),
+    rateLimitWindowSeconds: envInteger("RATE_LIMIT_WINDOW_SECONDS", 3600),
   };
 }
 
@@ -132,6 +132,17 @@ function byteLength(value) {
   return encoder.encode(value).byteLength;
 }
 
+function assertMarkdownSize(value, maxMarkdownBytes) {
+  if (byteLength(value) <= maxMarkdownBytes) {
+    return;
+  }
+
+  throw makeHttpError(
+    413,
+    `Markdown is too large. Limit is ${maxMarkdownBytes} bytes.`,
+  );
+}
+
 async function extractMarkdown(request, maxMarkdownBytes) {
   const contentType = request.headers.get("content-type") || "";
 
@@ -153,12 +164,7 @@ async function extractMarkdown(request, maxMarkdownBytes) {
       throw makeHttpError(400, 'Expected JSON like {"markdown":"# text"}.');
     }
 
-    if (byteLength(value) > maxMarkdownBytes) {
-      throw makeHttpError(
-        413,
-        `Markdown is too large. Limit is ${maxMarkdownBytes} bytes.`,
-      );
-    }
+    assertMarkdownSize(value, maxMarkdownBytes);
 
     return value;
   }
@@ -174,24 +180,14 @@ async function extractMarkdown(request, maxMarkdownBytes) {
       throw makeHttpError(400, "Expected Markdown in the markdown form field.");
     }
 
-    if (byteLength(value) > maxMarkdownBytes) {
-      throw makeHttpError(
-        413,
-        `Markdown is too large. Limit is ${maxMarkdownBytes} bytes.`,
-      );
-    }
+    assertMarkdownSize(value, maxMarkdownBytes);
 
     return value;
   }
 
   const value = await request.text();
 
-  if (byteLength(value) > maxMarkdownBytes) {
-    throw makeHttpError(
-      413,
-      `Markdown is too large. Limit is ${maxMarkdownBytes} bytes.`,
-    );
-  }
+  assertMarkdownSize(value, maxMarkdownBytes);
 
   return value;
 }
@@ -243,7 +239,7 @@ function navHtml(extra = "", options = {}) {
     ? '<a class="about-link" href="/about">about</a>'
     : "";
 
-  return `<nav>
+  return `<nav aria-label="Main">
     <a class="brand" href="/">tinypaste</a>
     ${about}
     ${extra}
@@ -251,7 +247,9 @@ function navHtml(extra = "", options = {}) {
 }
 
 function editorPage(error = "") {
-  const errorHtml = error ? `<p class="error">${escapeHtml(error)}</p>` : "";
+  const errorHtml = error
+    ? `<p class="error" role="alert">${escapeHtml(error)}</p>`
+    : "";
 
   return page(
     "tinypaste",
@@ -259,7 +257,8 @@ function editorPage(error = "") {
   ${navHtml("", { showAbout: true })}
   ${errorHtml}
   <form method="post" action="/">
-    <textarea name="markdown" autofocus spellcheck="true" placeholder="# Paste Markdown"></textarea>
+    <label class="visually-hidden" for="markdown">Markdown</label>
+    <textarea id="markdown" name="markdown" autofocus spellcheck="true" placeholder="# Paste Markdown"></textarea>
     <button type="submit">publish</button>
   </form>
 </main>`,
@@ -392,22 +391,35 @@ async function createPaste(request, kv, config) {
 }
 
 function acceptsJson(request) {
-  return (request.headers.get("accept") || "").includes("application/json");
+  const accept = request.headers.get("accept") || "";
+
+  return accept.split(",").some((part) => {
+    const type = part.split(";")[0].trim().toLowerCase();
+    return type === "application/json" || type.endsWith("+json");
+  });
 }
 
 function handleError(error, request) {
   const status = error.status || 500;
   const message = status === 500 ? "Internal server error." : error.message;
   const headers = {};
+  const url = new URL(request.url);
+  const isApiRequest = url.pathname === "/api/pastes";
 
   if (status === 429 && error.resetSeconds) {
     headers["retry-after"] = String(error.resetSeconds);
   }
 
-  const url = new URL(request.url);
-
-  if (url.pathname === "/api/pastes") {
+  if (isApiRequest) {
     Object.assign(headers, corsHeaders());
+    if (acceptsJson(request)) {
+      return response(
+        JSON.stringify({ error: message }),
+        status,
+        "application/json; charset=utf-8",
+        headers,
+      );
+    }
   }
 
   if (request.method === "POST" && url.pathname === "/" && status < 500) {
@@ -555,6 +567,8 @@ export const STYLE = `
   --muted: #666666;
   --line: #dddddd;
   --accent: #111111;
+  --danger: #9f1d20;
+  --surface: #fafafa;
 }
 
 * { box-sizing: border-box; }
@@ -573,6 +587,26 @@ a {
   color: var(--accent);
   text-decoration-thickness: 0.08em;
   text-underline-offset: 0.16em;
+}
+
+a:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .shell {
@@ -614,10 +648,9 @@ textarea {
   line-height: 1.45;
 }
 
-textarea:focus,
-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 
 button {
@@ -636,9 +669,14 @@ button:hover {
   border-color: var(--accent);
 }
 
+button:active {
+  background: var(--muted);
+  border-color: var(--muted);
+}
+
 .error {
   margin: 0 0 18px;
-  color: var(--accent);
+  color: var(--danger);
 }
 
 .markdown { overflow-wrap: break-word; }
@@ -664,7 +702,7 @@ button:hover {
 .markdown pre {
   overflow: auto;
   border-left: 3px solid var(--line);
-  background: #ffffff;
+  background: var(--surface);
   padding: 12px 14px;
 }
 
@@ -823,6 +861,7 @@ export const VIEW_SCRIPT = `
   const MAX_SCALE = 8;
   const diagrams = Array.from(document.querySelectorAll("[data-mermaid]"));
   let overlay = null;
+  let overlayController = null;
 
   if (!diagrams.length) return;
 
@@ -920,10 +959,13 @@ export const VIEW_SCRIPT = `
     applyTransform(content, state);
   }
 
-  function attachGestures(frame, content, options) {
-    const dynamicHeight = Boolean(options && options.dynamicHeight);
+  function attachGestures(frame, content, options = {}) {
+    const dynamicHeight = Boolean(options.dynamicHeight);
     const state = { scale: 1, x: 0, y: 0 };
     const pointers = new Map();
+    const listenerOptions = options.signal
+      ? { signal: options.signal }
+      : undefined;
     let previousPinch = null;
     let previousPointer = null;
     let lastTapAt = 0;
@@ -933,8 +975,10 @@ export const VIEW_SCRIPT = `
     frame.setAttribute("role", "img");
     frame.setAttribute("aria-label", "Mermaid diagram. Drag to pan. Wheel or pinch to zoom. Double-click or double-tap to reset.");
 
-    requestAnimationFrame(() => resetView(frame, content, state, dynamicHeight));
-    window.addEventListener("resize", () => resetView(frame, content, state, dynamicHeight));
+    const reset = () => resetView(frame, content, state, dynamicHeight);
+
+    requestAnimationFrame(reset);
+    window.addEventListener("resize", reset, listenerOptions);
 
     frame.addEventListener("wheel", (event) => {
       event.preventDefault();
@@ -1026,6 +1070,18 @@ export const VIEW_SCRIPT = `
     frame.addEventListener("lostpointercapture", finishPointer);
   }
 
+  function closeFullscreen() {
+    if (!overlay) return;
+
+    if (overlayController) {
+      overlayController.abort();
+      overlayController = null;
+    }
+
+    overlay.hidden = true;
+    overlay.querySelector(".mermaid-fullscreen-frame").replaceChildren();
+  }
+
   function ensureOverlay() {
     if (overlay) return overlay;
 
@@ -1035,15 +1091,11 @@ export const VIEW_SCRIPT = `
     overlay.innerHTML = '<div class="mermaid-fullscreen-bar"><button class="mermaid-close" type="button">close</button></div><div class="mermaid-fullscreen-frame"></div>';
     document.body.append(overlay);
 
-    overlay.querySelector(".mermaid-close").addEventListener("click", () => {
-      overlay.hidden = true;
-      overlay.querySelector(".mermaid-fullscreen-frame").replaceChildren();
-    });
+    overlay.querySelector(".mermaid-close").addEventListener("click", closeFullscreen);
 
     document.addEventListener("keydown", (event) => {
       if (!overlay.hidden && event.key === "Escape") {
-        overlay.hidden = true;
-        overlay.querySelector(".mermaid-fullscreen-frame").replaceChildren();
+        closeFullscreen();
       }
     });
 
@@ -1055,10 +1107,18 @@ export const VIEW_SCRIPT = `
     const frame = currentOverlay.querySelector(".mermaid-fullscreen-frame");
     const content = sourceContent.cloneNode(true);
 
+    if (overlayController) {
+      overlayController.abort();
+    }
+
+    overlayController = new AbortController();
     content.style.transform = "";
     frame.replaceChildren(content);
     currentOverlay.hidden = false;
-    attachGestures(frame, content, { dynamicHeight: false });
+    attachGestures(frame, content, {
+      dynamicHeight: false,
+      signal: overlayController.signal,
+    });
     frame.focus();
   }
 

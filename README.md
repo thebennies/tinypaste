@@ -4,9 +4,9 @@ Tiny public Markdown pastebin.
 
 Everything is public. There are no accounts and no API tokens. POST traffic is limited by IP.
 
-There are many paste tools, but too many are cluttered, ad-heavy, or focused on editing workflows. 
-This one is focused on sharing: publish Markdown, get a short public URL, move on. 
-The API is just a POST endpoint, so agents and pipelines can use it without API tokens or account setup. 
+There are many paste tools, but too many are cluttered, ad-heavy, or focused on editing workflows.
+This one is focused on sharing: publish Markdown, get a short public URL, move on.
+The API is just a POST endpoint, so agents and pipelines can use it without API tokens or account setup.
 Fewer features means fewer decisions for the person using it.
 
 Example: https://tnypst.xyz/Pk1orSZ
@@ -63,15 +63,15 @@ curl.exe -X POST "https://tnypst.xyz/api/pastes" `
 
 ## Self-host
 
-You can deploy for **free** on Deno in less than 1 minutes : 
+You can deploy for free on Deno in less than a minute:
 
-1) Fork my repo and push to your GitHub
-2) Open console.deno.com
-3) Create app from GitHub repo.
-4) Build config: *no preset ; dynamic runtime ; Entrypoint: main.js ; install and build command empty*
-5) Provision a Deno KV database.
-6) Assign that KV database to the app.
-
+1. Fork this repo and push it to GitHub.
+2. Open https://console.deno.com.
+3. Create an app from the GitHub repo.
+4. Use this build config: no preset, dynamic runtime, entrypoint `main.js`, empty install and build command.
+5. Provision a Deno KV database.
+6. Assign that KV database to the app.
+7. Set `BASE_URL` to the public origin if the generated API links use the wrong host.
 
 ## Legal
 
