@@ -336,7 +336,11 @@ async function hitRate(kv, ip, limit, windowSeconds) {
   throw makeHttpError(503, "Could not update rate limit.");
 }
 
-function clientIp(request) {
+function clientIp(request, info) {
+  if (info && info.remoteAddr) {
+    return info.remoteAddr.hostname;
+  }
+
   const forwarded = request.headers.get("x-forwarded-for");
 
   if (forwarded) {
@@ -346,10 +350,10 @@ function clientIp(request) {
   return request.headers.get("x-real-ip") || "unknown";
 }
 
-async function createPaste(request, kv, config) {
+async function createPaste(request, kv, config, info) {
   const rate = await hitRate(
     kv,
-    clientIp(request),
+    clientIp(request, info),
     config.rateLimitPosts,
     config.rateLimitWindowSeconds,
   );
@@ -442,7 +446,7 @@ export function createHandler(options = {}) {
     throw new Error("KV store is required.");
   }
 
-  return async (request) => {
+  return async (request, info) => {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -476,7 +480,7 @@ export function createHandler(options = {}) {
       }
 
       if (request.method === "POST" && pathname === "/") {
-        const { id } = await createPaste(request, kv, config);
+        const { id } = await createPaste(request, kv, config, info);
         return new Response(null, {
           status: 303,
           headers: { location: `/${id}` },
@@ -484,7 +488,7 @@ export function createHandler(options = {}) {
       }
 
       if (request.method === "POST" && pathname === "/api/pastes") {
-        const { id, rate } = await createPaste(request, kv, config);
+        const { id, rate } = await createPaste(request, kv, config, info);
         const url = publicUrl(request, config, `/${id}`);
         const headers = corsHeaders({
           "x-ratelimit-limit": String(config.rateLimitPosts),
