@@ -459,7 +459,13 @@ export function createHandler(options = {}) {
     throw new Error("KV store is required.");
   }
 
-  return async (request, info) => {
+  const secHeaders = {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "SAMEORIGIN",
+    "referrer-policy": "strict-origin-when-cross-origin",
+  };
+
+  async function route(request, info) {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -581,6 +587,14 @@ export function createHandler(options = {}) {
 
       return handleError(error, request);
     }
+  }
+
+  return async (request, info) => {
+    const res = await route(request, info);
+    for (const [k, v] of Object.entries(secHeaders)) {
+      res.headers.set(k, v);
+    }
+    return res;
   };
 }
 
