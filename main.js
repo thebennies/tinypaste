@@ -1444,7 +1444,7 @@ if (import.meta.main) {
   if (Deno.env.get("DENO_DEPLOYMENT_ID")) {
     Deno.serve(handler);
   } else {
-    Deno.serve({ port: config.port }, handler);
-    console.log(`tinypaste listening on ${config.port}`);
+    Deno.serve({ hostname: "0.0.0.0", port: config.port }, handler);
+    console.log(`tinypaste listening on http://0.0.0.0:${config.port}`);
   }
 }
