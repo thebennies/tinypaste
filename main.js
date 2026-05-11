@@ -1022,6 +1022,41 @@ button:disabled:hover {
     min-height: 200px;
   }
 }
+
+/* ── View page improvements ─────────────────────── */
+
+.markdown :not(pre) > code {
+  background: var(--surface);
+  padding: 0.1em 0.35em;
+  border-radius: 2px;
+  font-size: 0.9em;
+}
+
+.markdown mark {
+  background: #fff3b8;
+  padding: 0 0.15em;
+}
+
+.markdown ins {
+  text-decoration: underline;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 0.2em;
+}
+
+.markdown del {
+  opacity: 0.55;
+}
+
+.markdown sub,
+.markdown sup {
+  font-size: 0.78em;
+  line-height: 0;
+}
+
+.markdown abbr[title] {
+  text-decoration: underline dotted;
+  cursor: help;
+}
 `;
 
 export const VIEW_SCRIPT = `
