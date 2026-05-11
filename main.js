@@ -297,7 +297,7 @@ function viewPage(id, paste) {
   return page(
     title,
     `<main class="shell">
-  ${navHtml(`<a href="/${id}.md">raw</a>`)}
+  ${navHtml(`<a href="/${id}.md">raw</a> <a href="/?remix=${id}">remix</a>`)}
   <article class="markdown">${paste.html}</article>
 </main>`,
     `<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
@@ -1355,10 +1355,24 @@ function render(value) {
   preview.innerHTML = value.trim() ? md.render(value) : "";
 }
 
-const saved = localStorage.getItem(DRAFT_KEY);
-if (saved) {
-  textarea.value = saved;
-  render(saved);
+const remixId = new URLSearchParams(location.search).get("remix");
+if (remixId) {
+  history.replaceState(null, "", "/");
+  fetch("/" + remixId + ".md")
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error("not found"))))
+    .then((text) => {
+      textarea.value = text;
+      localStorage.setItem(DRAFT_KEY, text);
+      render(text);
+      publishBtn.disabled = false;
+    })
+    .catch(() => setError("Could not load paste for remix."));
+} else {
+  const saved = localStorage.getItem(DRAFT_KEY);
+  if (saved) {
+    textarea.value = saved;
+    render(saved);
+  }
 }
 
 publishBtn.disabled = !textarea.value.trim();
