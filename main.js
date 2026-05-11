@@ -132,6 +132,12 @@ function byteLength(value) {
   return encoder.encode(value).byteLength;
 }
 
+const TTL_MAP = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 };
+
+function parseTtl(value) {
+  return TTL_MAP[value] ?? null;
+}
+
 function assertMarkdownSize(value, maxMarkdownBytes) {
   if (byteLength(value) <= maxMarkdownBytes) {
     return;
@@ -264,6 +270,13 @@ function editorPage(error = "") {
         <label class="visually-hidden" for="markdown">Markdown</label>
         <textarea id="markdown" name="markdown" autofocus spellcheck="true" placeholder="# Paste Markdown"></textarea>
         <div class="editor-actions">
+          <select id="ttl" aria-label="Expiry">
+            <option value="">never</option>
+            <option value="1h">1 hour</option>
+            <option value="24h">24 hours</option>
+            <option value="7d">7 days</option>
+            <option value="30d">30 days</option>
+          </select>
           <button id="publish" type="submit">Publish</button>
         </div>
       </form>
@@ -291,13 +304,35 @@ async function aboutPage() {
   );
 }
 
+function formatExpiry(expiresAt) {
+  const ms = expiresAt - Date.now();
+  if (ms <= 0) return "expired";
+  if (ms < 3_600_000) return `expires in ${Math.ceil(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `expires in ${Math.ceil(ms / 3_600_000)}h`;
+  return `expires in ${Math.ceil(ms / 86_400_000)}d`;
+}
+
+function expiredPage() {
+  return page(
+    "tinypaste — expired",
+    `<main class="shell">
+  ${navHtml()}
+  <p class="expired-notice">This paste has expired.</p>
+  <p><a href="/">Create a new paste →</a></p>
+</main>`,
+  );
+}
+
 function viewPage(id, paste) {
   const title = titleFromMarkdown(paste.markdown);
+  const expiryHtml = paste.expiresAt
+    ? `<span class="expiry-notice">${formatExpiry(paste.expiresAt)}</span>`
+    : "";
 
   return page(
     title,
     `<main class="shell">
-  ${navHtml(`<a href="/${id}.md">raw</a> <a href="/?remix=${id}">remix</a>`)}
+  ${navHtml(`<a href="/${id}.md">raw</a> <a href="/?remix=${id}">remix</a>${expiryHtml}`)}
   <article class="markdown">${paste.html}</article>
 </main>`,
     `<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
@@ -311,7 +346,11 @@ await import("/view.js");
 
 async function getPaste(kv, id) {
   const entry = await kv.get(["paste", id]);
-  return entry.value || null;
+  if (!entry.value) return null;
+  if (entry.value.expiresAt && Date.now() > entry.value.expiresAt) {
+    return { expired: true };
+  }
+  return entry.value;
 }
 
 async function savePaste(kv, id, paste) {
@@ -386,10 +425,12 @@ async function createPaste(request, kv, config, info) {
     throw makeHttpError(400, "Markdown cannot be empty.");
   }
 
+  const ttlMs = parseTtl(new URL(request.url).searchParams.get("ttl"));
   const paste = {
     createdAt: new Date().toISOString(),
     html: renderMarkdown(markdown),
     markdown,
+    ...(ttlMs ? { expiresAt: Date.now() + ttlMs } : {}),
   };
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -547,9 +588,8 @@ export function createHandler(options = {}) {
       if (request.method === "GET" && rawMatch) {
         const paste = await getPaste(kv, rawMatch[1]);
 
-        if (!paste) {
-          throw makeHttpError(404, "Paste not found.");
-        }
+        if (!paste) throw makeHttpError(404, "Paste not found.");
+        if (paste.expired) throw makeHttpError(410, "Paste has expired.");
 
         return response(paste.markdown, 200, "text/markdown; charset=utf-8");
       }
@@ -559,9 +599,8 @@ export function createHandler(options = {}) {
       if (request.method === "GET" && htmlMatch) {
         const paste = await getPaste(kv, htmlMatch[1]);
 
-        if (!paste) {
-          throw makeHttpError(404, "Paste not found.");
-        }
+        if (!paste) throw makeHttpError(404, "Paste not found.");
+        if (paste.expired) throw makeHttpError(410, "Paste has expired.");
 
         return response(paste.html, 200, "text/html; charset=utf-8");
       }
@@ -572,8 +611,9 @@ export function createHandler(options = {}) {
         const id = viewMatch[1];
         const paste = await getPaste(kv, id);
 
-        if (!paste) {
-          throw makeHttpError(404, "Paste not found.");
+        if (!paste) throw makeHttpError(404, "Paste not found.");
+        if (paste.expired) {
+          return response(expiredPage(), 410, "text/html; charset=utf-8");
         }
 
         return response(viewPage(id, paste), 200, "text/html; charset=utf-8");
@@ -1071,6 +1111,35 @@ button:disabled:hover {
   text-decoration: underline dotted;
   cursor: help;
 }
+
+/* ── Remix & expiry ─────────────────────────────── */
+
+.expiry-notice {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.expired-notice {
+  font-size: 1.1rem;
+  color: var(--muted);
+  margin: 2rem 0 0.5rem;
+}
+
+#ttl {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--muted);
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+#ttl:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 `;
 
 export const VIEW_SCRIPT = `
@@ -1350,6 +1419,7 @@ const textarea = document.getElementById("markdown");
 const preview = document.getElementById("preview");
 const publishBtn = document.getElementById("publish");
 const form = document.getElementById("editor-form");
+const ttlSelect = document.getElementById("ttl");
 
 function render(value) {
   preview.innerHTML = value.trim() ? md.render(value) : "";
@@ -1416,7 +1486,8 @@ async function publish() {
   publishBtn.disabled = true;
   delete publishBtn.dataset.state;
   try {
-    const res = await fetch("/api/pastes", {
+    const ttl = ttlSelect?.value || "";
+    const res = await fetch("/api/pastes" + (ttl ? "?ttl=" + ttl : ""), {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: markdown,
