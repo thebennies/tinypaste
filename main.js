@@ -253,15 +253,27 @@ function editorPage(error = "") {
 
   return page(
     "tinypaste",
-    `<main class="shell">
-  ${navHtml("", { showAbout: true })}
-  ${errorHtml}
-  <form method="post" action="/">
-    <label class="visually-hidden" for="markdown">Markdown</label>
-    <textarea id="markdown" name="markdown" autofocus spellcheck="true" placeholder="# Paste Markdown"></textarea>
-    <button type="submit">publish</button>
-  </form>
-</main>`,
+    `<div class="editor-shell">
+  <header class="editor-header">
+    ${navHtml("", { showAbout: true })}
+    ${errorHtml}
+  </header>
+  <div class="editor-layout">
+    <div class="editor-pane">
+      <form id="editor-form" method="post" action="/">
+        <label class="visually-hidden" for="markdown">Markdown</label>
+        <textarea id="markdown" name="markdown" autofocus spellcheck="true" placeholder="# Paste Markdown"></textarea>
+        <div class="editor-actions">
+          <button id="publish" type="submit">Publish</button>
+        </div>
+      </form>
+    </div>
+    <div class="editor-preview" aria-label="Preview">
+      <div id="preview" class="markdown"></div>
+    </div>
+  </div>
+</div>`,
+    `<script type="module" src="/editor.js"></script>`,
   );
 }
 
@@ -463,6 +475,14 @@ export function createHandler(options = {}) {
       if (request.method === "GET" && pathname === "/view.js") {
         return response(
           VIEW_SCRIPT,
+          200,
+          "application/javascript; charset=utf-8",
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/editor.js") {
+        return response(
+          EDITOR_SCRIPT,
           200,
           "application/javascript; charset=utf-8",
         );
@@ -860,6 +880,148 @@ button:active {
     padding: 12px;
   }
 }
+
+/* ── Editor layout ──────────────────────────────── */
+
+body:has(.editor-shell) {
+  overflow: hidden;
+  height: 100dvh;
+}
+
+.editor-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.editor-header {
+  flex: 0 0 auto;
+  padding: 16px 24px 0;
+}
+
+.editor-header nav {
+  margin-bottom: 16px;
+}
+
+.editor-header .error {
+  margin-bottom: 12px;
+}
+
+.editor-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+}
+
+.editor-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+}
+
+.editor-pane form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 0;
+  overflow: hidden;
+}
+
+#markdown {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 20px 24px;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.editor-actions {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 24px;
+  border-top: 1px solid var(--line);
+}
+
+.editor-preview {
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+#preview:empty::before {
+  content: "Preview will appear here";
+  color: var(--muted);
+  font-style: italic;
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button:disabled:hover {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+
+#publish[data-state="confirming"] {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
+#publish[data-state="confirming"]:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+@media (max-width: 720px) {
+  body:has(.editor-shell) {
+    overflow: auto;
+    height: auto;
+  }
+
+  .editor-shell {
+    height: auto;
+  }
+
+  .editor-layout {
+    grid-template-columns: 1fr;
+    overflow: visible;
+    border-top: none;
+  }
+
+  .editor-pane {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    overflow: visible;
+  }
+
+  .editor-pane form {
+    overflow: visible;
+    flex: none;
+  }
+
+  #markdown {
+    min-height: 40vh;
+    flex: none;
+    resize: vertical;
+  }
+
+  .editor-preview {
+    padding: 20px 16px;
+    min-height: 200px;
+  }
+}
 `;
 
 export const VIEW_SCRIPT = `
@@ -933,8 +1095,8 @@ export const VIEW_SCRIPT = `
   function resetPanZoom(panZoom) {
     try {
       panZoom.resetZoom();
-      panZoom.center();
       panZoom.fit();
+      panZoom.center();
     } catch {}
   }
 
@@ -1094,7 +1256,7 @@ export const VIEW_SCRIPT = `
     try {
       const result = await window.mermaid.render("mermaid-" + Date.now() + "-" + index, source);
       const svgHtml = result.svg;
-      content.innerHTML = result.svg;
+      content.innerHTML = svgHtml;
       attachPanZoom(frame, content, { dynamicHeight: true });
       open.addEventListener("click", () => openFullscreen(svgHtml));
     } catch {
@@ -1107,6 +1269,122 @@ export const VIEW_SCRIPT = `
 
   diagrams.forEach((diagram, index) => renderDiagram(diagram, index));
 })();
+`;
+
+export const EDITOR_SCRIPT = `
+import MarkdownIt from "https://esm.sh/markdown-it@14.1.0";
+import markdownItAbbr from "https://esm.sh/markdown-it-abbr@2.0.0";
+import markdownItDeflist from "https://esm.sh/markdown-it-deflist@3.0.0";
+import markdownItFootnote from "https://esm.sh/markdown-it-footnote@4.0.0";
+import markdownItIns from "https://esm.sh/markdown-it-ins@4.0.0";
+import markdownItKatex from "https://esm.sh/markdown-it-katex@2.0.3";
+import markdownItMark from "https://esm.sh/markdown-it-mark@4.0.0";
+import markdownItSub from "https://esm.sh/markdown-it-sub@2.0.0";
+import markdownItSup from "https://esm.sh/markdown-it-sup@2.0.0";
+import markdownItTaskLists from "https://esm.sh/markdown-it-task-lists@2.1.1";
+
+const md = new MarkdownIt({ html: false, linkify: true, typographer: true })
+  .use(markdownItAbbr)
+  .use(markdownItDeflist)
+  .use(markdownItFootnote)
+  .use(markdownItIns)
+  .use(markdownItKatex)
+  .use(markdownItMark)
+  .use(markdownItSub)
+  .use(markdownItSup)
+  .use(markdownItTaskLists, { enabled: false });
+
+const DRAFT_KEY = "tinypaste:draft";
+const CONFIRM_MS = 3000;
+
+const textarea = document.getElementById("markdown");
+const preview = document.getElementById("preview");
+const publishBtn = document.getElementById("publish");
+const form = document.getElementById("editor-form");
+
+function render(value) {
+  preview.innerHTML = value.trim() ? md.render(value) : "";
+}
+
+const saved = localStorage.getItem(DRAFT_KEY);
+if (saved) {
+  textarea.value = saved;
+  render(saved);
+}
+
+publishBtn.disabled = !textarea.value.trim();
+
+let debounceTimer = null;
+let confirmTimer = null;
+let confirming = false;
+
+textarea.addEventListener("input", () => {
+  const value = textarea.value;
+  publishBtn.disabled = !value.trim();
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    localStorage.setItem(DRAFT_KEY, value);
+    render(value);
+  }, 300);
+});
+
+publishBtn.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!confirming) {
+    confirming = true;
+    publishBtn.textContent = "Confirm — this will be public";
+    publishBtn.dataset.state = "confirming";
+    confirmTimer = setTimeout(() => {
+      confirming = false;
+      publishBtn.textContent = "Publish";
+      delete publishBtn.dataset.state;
+    }, CONFIRM_MS);
+  } else {
+    clearTimeout(confirmTimer);
+    confirming = false;
+    publish();
+  }
+});
+
+async function publish() {
+  const markdown = textarea.value.trim();
+  if (!markdown) return;
+  publishBtn.textContent = "Publishing…";
+  publishBtn.disabled = true;
+  delete publishBtn.dataset.state;
+  try {
+    const res = await fetch("/api/pastes", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: markdown,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let msg;
+      try { msg = JSON.parse(text).error; } catch { msg = text.trim(); }
+      throw new Error(msg || "HTTP " + res.status);
+    }
+    const id = (await res.text()).trim().split("/").pop();
+    localStorage.removeItem(DRAFT_KEY);
+    location.href = "/" + id;
+  } catch (err) {
+    setError(err.message);
+    publishBtn.textContent = "Publish";
+    publishBtn.disabled = false;
+  }
+}
+
+function setError(msg) {
+  let el = document.getElementById("editor-error");
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "editor-error";
+    el.className = "error";
+    el.setAttribute("role", "alert");
+    form.prepend(el);
+  }
+  el.textContent = msg;
+}
 `;
 
 if (import.meta.main) {
